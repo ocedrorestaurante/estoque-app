@@ -273,6 +273,16 @@ main{max-width:720px;margin:0 auto;padding-top:14px;}
 .tool-icon svg{width:18px;height:18px;}
 .stepper input{width:58px;}
 .stepper input::placeholder{color:var(--ink-dim);opacity:.75;font-size:.7rem;}
+.pack-in{display:flex;align-items:flex-end;gap:4px;flex:none;}
+.pack-in label{display:flex;flex-direction:column;align-items:center;gap:2px;}
+.pack-in input{width:52px;height:34px;text-align:center;border:1px solid var(--line-strong);border-radius:10px;background:var(--surface);color:var(--ink);font-family:var(--font-mono);font-size:.95rem;padding:0 2px;}
+.pack-in input:focus{outline:none;background:var(--accent-soft);}
+.pack-in input::placeholder{color:var(--ink-dim);opacity:.75;font-size:.7rem;}
+.pack-in span{font-size:.6rem;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.04em;}
+.pack-in .pack-plus{font-size:1rem;color:var(--ink-dim);padding-bottom:8px;text-transform:none;}
+.g-pack-label{margin-top:18px;font-size:.72rem;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.05em;font-weight:600;text-align:center;}
+.g-pack-label + .g-stepper{margin-top:6px;}
+.field-help{font-size:.72rem;color:var(--ink-dim);margin-top:4px;line-height:1.35;}
 .item-row.nc{background:var(--bg-raised);}
 .item-row.nc .item-name{color:var(--ink-dim);}
 .nc-btn{appearance:none;border:none;background:none;color:var(--ink-dim);width:28px;height:34px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;margin-left:-4px;border-radius:8px;}
@@ -505,7 +515,7 @@ var SECTOR_PILL_CLASS = {Bar:"pill-bar", Vinhos:"pill-vinhos", Cozinha:"pill-coz
 var state = {
   tab: 'count', sector: 'Bar', catalogSeg: 'itens', search: '',
   items: {}, suppliers: {}, sessions: [],
-  draft: {}, collapsed: {}, responsavel: '', historyOpen: {},
+  draft: {}, packDraft: {}, collapsed: {}, responsavel: '', historyOpen: {},
   online: 'connecting', modal: null, scopedSector: null,
   routes: {}, scanAdd: false, auth: 'checking', userEmail: '', countKind: 'completa', kindLocked: false, shareNumbers: ['17 98171-4454', '17 99617-5706']
 };
@@ -552,6 +562,46 @@ function formatDateTimeBR(iso){ if(!iso) return ''; var d = new Date(iso); if(is
 function esc(s){ return (s===undefined||s===null?'':String(s)).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function num(v){ if(v===''||v===undefined||v===null) return null; var n = parseFloat(String(v).replace(',','.')); return isNaN(n) ? null : n; }
 function fmtQty(n){ if(n===null||n===undefined) return '—'; return (Math.round(n*100)/100).toString().replace('.', ','); }
+// ---- itens que vêm em caixa/fardo: estoque guardado em caixas (com fração), contado como caixas fechadas + soltas ----
+function packOf(it){ var p = it && it.packSize ? parseInt(it.packSize, 10) : 0; return p > 1 ? p : 0; }
+function packWord(it, n){ var u = (it && it.unit) || 'caixa'; if(n === 1) return u; return /^(caixa|fardo|pacote|saco|lata|garrafa)$/.test(u) ? u + 's' : u; }
+function packSplit(it, n){ var p = packOf(it); var tot = Math.round((n || 0) * p); if(tot < 0) tot = 0; var cx = Math.floor(tot / p); return {cx: cx, un: tot - cx * p}; }
+function fmtCount(it, n){
+  if(n === null || n === undefined) return '—';
+  if(!packOf(it)) return fmtQty(n) + (it && it.unit ? ' ' + it.unit : '');
+  var sp = packSplit(it, n);
+  if(!sp.un) return sp.cx + ' ' + packWord(it, sp.cx);
+  return sp.cx + ' ' + packWord(it, sp.cx) + ' + ' + sp.un + ' un';
+}
+function fmtShort(it, n){
+  if(n === null || n === undefined) return '—';
+  if(!packOf(it)) return fmtQty(n);
+  var sp = packSplit(it, n); return sp.un ? sp.cx + '+' + sp.un + 'un' : String(sp.cx);
+}
+function sugRound(it, v){ if(v === null || v === undefined) return v; return packOf(it) ? Math.max(1, Math.ceil(v - 1e-9)) : v; }
+function packParts(it, sector){
+  var raw = draftOf(sector)[it.id];
+  var pd = state.packDraft[it.id];
+  if(pd && pd.tot === raw) return pd;
+  if(!isFilled(raw) || isNC(raw)) return {cx: '', un: '', tot: raw};
+  var sp = packSplit(it, num(raw)); return {cx: String(sp.cx), un: String(sp.un), tot: raw};
+}
+function packSet(it, sector, cx, un){
+  var p = packOf(it), d = draftOf(sector), c = num(cx), u = num(un), tot;
+  if(c === null && u === null){ delete d[it.id]; tot = undefined; }
+  else { tot = String(Math.round(((c || 0) + (u || 0) / p) * 10000) / 10000); d[it.id] = tot; }
+  state.packDraft[it.id] = {cx: cx, un: un, tot: tot};
+}
+function packInputsHtml(it, sector, extraAttr){
+  var pp = packParts(it, sector);
+  var last = (it.currentCount === null || it.currentCount === undefined) ? null : packSplit(it, it.currentCount);
+  return '<div class="pack-in" data-id="'+it.id+'" data-sector="'+esc(sector)+'"'+(extraAttr||'')+'>' +
+    '<label><input type="text" inputmode="numeric" data-action="pack-input" data-part="cx" value="'+esc(pp.cx)+'" placeholder="'+(last ? 'ant. '+last.cx : '—')+'" aria-label="'+esc(packWord(it, 2))+' fechadas de '+esc(it.product)+'"><span>'+esc(packWord(it, 2))+'</span></label>' +
+    '<span class="pack-plus">+</span>' +
+    '<label><input type="text" inputmode="numeric" data-action="pack-input" data-part="un" value="'+esc(pp.un)+'" placeholder="'+(last ? 'ant. '+last.un : '—')+'" aria-label="Unidades soltas de '+esc(it.product)+'"><span>soltas</span></label>' +
+  '</div>';
+}
+function packTag(it){ return packOf(it) ? '<span class="tag">'+esc(it.unit||'caixa')+' c/ '+packOf(it)+'</span>' : '<span class="tag">'+esc(it.unit||'')+'</span>'; }
 
 function itemsArray(){ return Object.keys(state.items).map(function(k){ return state.items[k]; }); }
 function suppliersArray(){ return Object.keys(state.suppliers).map(function(k){ return state.suppliers[k]; }).sort(function(a,b){return (a.name||'').localeCompare(b.name||'','pt-BR');}); }
@@ -633,7 +683,7 @@ function chunk(arr, n){ var out=[]; for(var i=0;i<arr.length;i+=n) out.push(arr.
 
 var ITEM_MAP = {sector:'sector', category:'category', order:'ordem', product:'product', unit:'unit', minStock:'min_stock',
   supplierId:'supplier_id', supplierName:'supplier_name', notes:'notes', currentCount:'current_count',
-  lastCountedAt:'last_counted_at', lastSkippedAt:'last_skipped_at', lastSessionId:'last_session_id', barcodes:'barcodes', daily:'daily', createdAt:'created_at'};
+  lastCountedAt:'last_counted_at', lastSkippedAt:'last_skipped_at', lastSessionId:'last_session_id', barcodes:'barcodes', daily:'daily', createdAt:'created_at', packSize:'pack_size'};
 var SUP_MAP = {name:'name', contact:'contact', cnpj:'cnpj', notes:'notes', createdAt:'created_at'};
 var SES_MAP = {sector:'sector', kind:'kind', createdAt:'created_at', date:'date', responsavel:'responsavel', counts:'counts', skipped:'skipped'};
 var TABLES = {items:{t:'items', m:ITEM_MAP}, suppliers:{t:'suppliers', m:SUP_MAP}, sessions:{t:'sessions', m:SES_MAP}};
@@ -642,7 +692,7 @@ function toRow(map, obj){ var r = {}; Object.keys(obj).forEach(function(k){ if(m
 function fromRow(map, row){
   var o = {id: row.id};
   Object.keys(map).forEach(function(k){ if(row[map[k]] !== undefined) o[k] = row[map[k]]; });
-  ['currentCount','minStock'].forEach(function(k){ if(typeof o[k] === 'string') o[k] = parseFloat(o[k]); });
+  ['currentCount','minStock','packSize'].forEach(function(k){ if(typeof o[k] === 'string') o[k] = parseFloat(o[k]); });
   return o;
 }
 function check(res){ if(res && res.error) throw res.error; return res ? res.data : null; }
@@ -963,6 +1013,9 @@ function renderItemRow(it, draft){
   var noteBtn = it.notes ? '<button class="icon-btn" style="width:20px;height:20px;border:none;background:none;" data-action="show-note" data-id="'+it.id+'" title="Observação">'+ICONS.note+'</button>' : '';
   var controls = nc
     ? '<button class="nc-chip" data-action="nc-toggle" data-id="'+it.id+'">Não contado<small>desfazer</small></button>'
+    : packOf(it)
+    ? packInputsHtml(it, it.sector) +
+      '<button class="nc-btn" data-action="nc-toggle" data-id="'+it.id+'" title="Marcar como não contado" aria-label="Marcar '+esc(it.product)+' como não contado">'+ICONS.skip+'</button>'
     : '<div class="stepper">' +
         '<button data-action="step" data-id="'+it.id+'" data-dir="-1" aria-label="Diminuir">−</button>' +
         '<input type="text" inputmode="decimal" data-action="qty-input" data-id="'+it.id+'" value="'+esc(val)+'" placeholder="'+(last ? 'ant. '+esc(last) : '—')+'" aria-label="Quantidade de '+esc(it.product)+'">' +
@@ -975,7 +1028,7 @@ function renderItemRow(it, draft){
     '<div class="item-main">' +
       '<div class="item-name">'+esc(it.product)+noteBtn+'</div>' +
       '<div class="item-sub">' +
-        '<span class="tag">'+esc(it.unit||'')+'</span>' +
+        packTag(it) +
         (it.minStock!==null&&it.minStock!==undefined ? '<span class="tag">mín '+fmtQty(it.minStock)+'</span>' : '') +
         (supplierLabel(it) ? '<span class="tag">'+esc(supplierLabel(it))+'</span>' : '') +
         (low ? '<span class="tag low-tag">abaixo do mínimo</span>' : '') +
@@ -1004,7 +1057,7 @@ var ORDER_NOSUP = 'zzzz-sem-fornecedor';
 function orderSuggestion(it){
   if(!isLow(it)) return null;
   var s = it.minStock - (it.currentCount || 0);
-  return s > 0 ? s : it.minStock;
+  return sugRound(it, s > 0 ? s : it.minStock);
 }
 function loadOrderQty(){
   if(state.orderQty) return state.orderQty;
@@ -1078,8 +1131,8 @@ function renderOrdersList(){
       var low = isLow(it), sug = orderSuggestion(it);
       var nc = wasSkippedLast(it), never = it.currentCount === null || it.currentCount === undefined;
       var sub = SECTOR_LABEL[it.sector] + ' · ' + esc(it.unit);
-      if(nc && !never) sub = '<span class="po-nc">não contado</span> · última '+fmtQty(it.currentCount)+' '+esc(it.unit)+(it.lastCountedAt?' em '+shortDateBR(it.lastCountedAt):'');
-      var est = never ? '<span class="po-st none">—</span>' : '<span class="po-st'+(nc?' none':'')+'">'+fmtQty(it.currentCount)+'</span>';
+      if(nc && !never) sub = '<span class="po-nc">não contado</span> · última '+esc(fmtCount(it, it.currentCount))+(it.lastCountedAt?' em '+shortDateBR(it.lastCountedAt):'');
+      var est = never ? '<span class="po-st none">—</span>' : '<span class="po-st'+(nc?' none':'')+'">'+esc(fmtShort(it, it.currentCount))+'</span>';
       return '' +
       '<div class="po-row'+(low?' low':'')+'">' +
         '<div class="po-name"><div>'+esc(it.product)+'</div><small>'+(never?'<span class="po-nc">nunca contado</span>':sub)+'</small></div>' +
@@ -1114,7 +1167,7 @@ function buildOrderMessage(supplier, items){
   items.forEach(function(it){
     var typed = num(oq[it.id]);
     var q = typed > 0 ? typed : (String(oq[it.id]||'').trim()==='' ? orderSuggestion(it) : null);
-    if(q > 0) lines.push('- '+it.product+': '+fmtQty(q)+' '+it.unit);
+    if(q > 0) lines.push('- '+it.product+': '+fmtCount(it, q));
   });
   return lines.length > 2 ? lines.join('\n') : '';
 }
@@ -1207,7 +1260,7 @@ function renderCatalogItems(){
       return '' +
       '<div class="item-row">' +
         '<div class="item-main"><div class="item-name">'+esc(it.product)+'</div>' +
-        '<div class="item-sub"><span class="tag">'+esc(it.unit)+'</span>'+(it.minStock!=null?'<span class="tag">mín '+fmtQty(it.minStock)+'</span>':'')+(supplierLabel(it)?'<span class="tag">'+esc(supplierLabel(it))+'</span>':'')+((it.barcodes&&it.barcodes.length)?'<span class="tag">'+it.barcodes.length+' cód.</span>':'')+'</div></div>' +
+        '<div class="item-sub">'+packTag(it)+(it.minStock!=null?'<span class="tag">mín '+fmtQty(it.minStock)+'</span>':'')+(supplierLabel(it)?'<span class="tag">'+esc(supplierLabel(it))+'</span>':'')+((it.barcodes&&it.barcodes.length)?'<span class="tag">'+it.barcodes.length+' cód.</span>':'')+'</div></div>' +
         '<div class="row-actions">' +
           '<button class="icon-btn" data-action="open-item-form" data-id="'+it.id+'">'+ICONS.edit+'</button>' +
           '<button class="icon-btn" data-action="delete-item" data-id="'+it.id+'">'+ICONS.trash+'</button>' +
@@ -1252,8 +1305,8 @@ function renderHistory(){
     var detail = data.groups.map(function(g){
       return '<div class="hd-sup"><span>'+esc(g.supplier || 'Sem fornecedor definido')+'</span>'+(g.buyN?'<span class="hd-buy">'+g.buyN+' para comprar</span>':'')+'</div>' +
         g.items.map(function(e){
-          if(e.skipped) return '<div class="hd-item skipped"><span>'+esc(e.name)+(e.last?' <small>(última: '+fmtQty(e.last.qty)+' '+esc(e.unit)+' em '+shortDateBR(e.last.at)+')</small>':'')+'</span><span>não contado</span></div>';
-          return '<div class="hd-item '+(e.low?'low':'')+'"><span>'+esc(e.name)+'</span><span class="mono">'+fmtQty(e.qty)+' '+esc(e.unit)+(e.sug!==null?' <small>· comprar '+fmtQty(e.sug)+'</small>':'')+'</span></div>';
+          if(e.skipped) return '<div class="hd-item skipped"><span>'+esc(e.name)+(e.last?' <small>(última: '+esc(fmtCount(e.it, e.last.qty))+' em '+shortDateBR(e.last.at)+')</small>':'')+'</span><span>não contado</span></div>';
+          return '<div class="hd-item '+(e.low?'low':'')+'"><span>'+esc(e.name)+'</span><span class="mono">'+esc(fmtCount(e.it, e.qty))+(e.sug!==null?' <small>· comprar '+esc(packOf(e.it) ? fmtCount(e.it, e.sug) : fmtQty(e.sug))+'</small>':'')+'</span></div>';
         }).join('');
     }).join('');
     return '' +
@@ -1314,8 +1367,8 @@ function sessionRows(s){
     var ref = skipped ? (last ? last.qty : null) : qty;
     var low = min !== null && ref !== null && ref !== undefined && ref <= min;
     var sug = null;
-    if(low){ sug = min - (ref || 0); if(!(sug > 0)) sug = min; }
-    return {id: id, cat: it.category || 'Outros', name: it.product || id, qty: qty, unit: it.unit || '', min: min,
+    if(low){ sug = min - (ref || 0); if(!(sug > 0)) sug = min; sug = sugRound(it, sug); }
+    return {id: id, it: it, cat: it.category || 'Outros', name: it.product || id, qty: qty, unit: it.unit || '', min: min,
             low: low, sug: sug, skipped: !!skipped, last: last, supplier: (state.items[id] ? supplierLabel(it) : null) || null};
   }
   var rows = Object.keys(s.counts || {}).map(function(id){ return mk(id, s.counts[id], false); });
@@ -1423,7 +1476,7 @@ async function buildPdf(s){
     g.items.forEach(function(r){
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
       var lines = doc.splitTextToSize(r.name, NAME_W).slice(0, 2);
-      var sub = r.skipped ? (r.last ? 'última: ' + fmtQty(r.last.qty) + ' ' + r.unit + ' em ' + shortDateBR(r.last.at) : 'sem contagem anterior') : '';
+      var sub = r.skipped ? (r.last ? 'última: ' + fmtCount(r.it, r.last.qty) + ' em ' + shortDateBR(r.last.at) : 'sem contagem anterior') : '';
       var h = Math.max(3.9 * lines.length + (sub ? 3.4 : 0), 6.4) + 3.2;
       if(y + h > BOTTOM) newPage(g);
       var top = y - 3.6;
@@ -1438,9 +1491,9 @@ async function buildPdf(s){
         doc.text('não', X_EST, y - 0.6, {align: 'right'}); doc.text('contado', X_EST, y + 2.6, {align: 'right'});
       } else {
         doc.setFont('helvetica', 'bold'); doc.setFontSize(13); tc(r.low ? red : ink);
-        doc.text(fmtQty(r.qty), X_EST - 0.2, y + 0.6, {align: 'right'});
+        doc.text(fmtShort(r.it, r.qty), X_EST - 0.2, y + 0.6, {align: 'right'});
         doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); tc(grey);
-        doc.text(String(r.unit), X_EST - 0.2, y + 3.6, {align: 'right'});
+        doc.text(packOf(r.it) ? String(r.unit) + ' + soltas' : String(r.unit), X_EST - 0.2, y + 3.6, {align: 'right'});
       }
       // mínimo
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9); tc(grey);
@@ -1513,7 +1566,7 @@ function summaryText(s){
     data.rows.length + ' itens contados' + (data.skipped.length ? ', ' + data.skipped.length + ' não contados' : '') + '.'];
   if(low.length){
     lines.push('', '*No mínimo ou abaixo:*');
-    low.forEach(function(r){ lines.push('- ' + r.name + ': ' + fmtQty(r.qty) + ' ' + r.unit + ' (mín ' + fmtQty(r.min) + ')'); });
+    low.forEach(function(r){ lines.push('- ' + r.name + ': ' + fmtCount(r.it, r.qty) + ' (mín ' + fmtQty(r.min) + ')'); });
   }
   lines.push('', 'O PDF completo segue em anexo.');
   return lines.join('\n');
@@ -1849,6 +1902,8 @@ function modalItemForm(m){
         '<div class="field"><label>Estoque mínimo</label><input type="text" inputmode="decimal" name="minStock" value="'+(it&&it.minStock!=null?fmtQty(it.minStock):'')+'"></div>' +
         '<div class="field"><label>Fornecedor</label><select name="supplierId">'+supOpts+'</select></div>' +
       '</div>' +
+      '<div class="field"><label>Vem em caixa/fardo de</label><input type="text" inputmode="numeric" name="packSize" placeholder="Ex.: 24, 12, 6 (vazio = conta normal)" value="'+(it&&packOf(it)?packOf(it):'')+'">' +
+        '<div class="field-help">Preencha só se o item vem em caixa ou fardo. Aí a unidade e o mínimo ficam em caixas/fardos, e na contagem aparecem dois campos: fechadas + soltas.</div></div>' +
       '<div class="field"><label>Códigos de barras</label><input type="text" name="barcodes" autocomplete="off" placeholder="Se tiver mais de um, separe por vírgula" value="'+esc(((it&&it.barcodes)||[]).join(', '))+'"></div>' +
       '<label class="check-row"><input type="checkbox" name="daily"'+(it&&it.daily?' checked':'')+'> Entra na contagem diária</label>' +
       '<div class="field"><label>Observações</label><textarea name="notes">'+esc(it?it.notes:'')+'</textarea></div>' +
@@ -1929,20 +1984,36 @@ function modalGuided(m){
   var raw = d[it.id];
   var nc = isNC(raw);
   var val = (!nc && isFilled(raw)) ? String(raw) : '';
-  var last = (it.currentCount === null || it.currentCount === undefined) ? '' : fmtQty(it.currentCount);
+  var last = (it.currentCount === null || it.currentCount === undefined) ? '' : fmtCount(it, it.currentCount);
   var done = m.ids.filter(function(id){ return isFilled(d[id]); }).length;
   var pct = Math.round(done / m.ids.length * 100);
   var low = !nc && val !== '' && isLow(Object.assign({}, it, {currentCount: num(val)}));
   var isLast = m.i === m.ids.length - 1;
   var nextIt = isLast ? null : state.items[m.ids[m.i+1]];
+  var pk = packOf(it), pp = pk ? packParts(it, m.sector) : null;
   var input = nc
     ? '<div class="g-nc">Marcado como não contado.<br><span style="font-weight:500;font-size:.85rem">O estoque dele fica como estava.</span></div>'
+    : pk
+    ? '<div class="g-pack-label">'+esc(packWord(it, 2))+' fechadas ('+pk+' em cada)</div>' +
+      '<div class="g-stepper">' +
+        '<button data-action="g-pstep" data-part="cx" data-dir="-1" aria-label="Diminuir">−</button>' +
+        '<input id="g-input" type="text" inputmode="numeric" enterkeyhint="next" autocomplete="off" value="'+esc(pp.cx)+'" placeholder="0" aria-label="'+esc(packWord(it, 2))+' fechadas">' +
+        '<button data-action="g-pstep" data-part="cx" data-dir="1" aria-label="Aumentar">+</button>' +
+      '</div>' +
+      '<div class="g-pack-label">Unidades soltas</div>' +
+      '<div class="g-stepper">' +
+        '<button data-action="g-pstep" data-part="un" data-dir="-1" aria-label="Diminuir">−</button>' +
+        '<input id="g-input-un" type="text" inputmode="numeric" enterkeyhint="next" autocomplete="off" value="'+esc(pp.un)+'" placeholder="0" aria-label="Unidades soltas">' +
+        '<button data-action="g-pstep" data-part="un" data-dir="1" aria-label="Aumentar">+</button>' +
+      '</div>' +
+      '<div class="g-hint">'+(last ? 'Última contagem: '+esc(last) : 'Ainda sem contagem anterior')+'</div>' +
+      '<div class="g-low" id="g-low"'+(low?'':' hidden')+'>Abaixo do mínimo: vai para a lista de pedidos.</div>'
     : '<div class="g-stepper">' +
         '<button data-action="g-step" data-dir="-1" aria-label="Diminuir">−</button>' +
         '<input id="g-input" type="text" inputmode="decimal" enterkeyhint="next" autocomplete="off" value="'+esc(val)+'" placeholder="0" aria-label="Quantidade contada">' +
         '<button data-action="g-step" data-dir="1" aria-label="Aumentar">+</button>' +
       '</div>' +
-      '<div class="g-hint">'+(last ? 'Última contagem: '+esc(last)+' '+esc(it.unit||'') : 'Ainda sem contagem anterior')+'</div>' +
+      '<div class="g-hint">'+(last ? 'Última contagem: '+esc(last) : 'Ainda sem contagem anterior')+'</div>' +
       '<div class="g-low" id="g-low"'+(low?'':' hidden')+'>Abaixo do mínimo: vai para a lista de pedidos.</div>';
   return '' +
   '<div class="modal-sheet sheet-full" data-stop="1">' +
@@ -1955,7 +2026,7 @@ function modalGuided(m){
     '<div class="g-body">' +
       '<div class="g-place">'+esc(it.category)+'</div>' +
       '<h2 class="g-name">'+esc(it.product)+'</h2>' +
-      '<div class="item-sub"><span class="tag">'+esc(it.unit||'')+'</span>' +
+      '<div class="item-sub">'+packTag(it) +
         (it.minStock!==null&&it.minStock!==undefined ? '<span class="tag">mín '+fmtQty(it.minStock)+'</span>' : '') +
         (it.notes ? '<span class="tag">'+esc(it.notes)+'</span>' : '') +
       '</div>' +
@@ -1972,8 +2043,30 @@ function modalGuided(m){
 
 function guidedRefresh(){ render(); renderModal(); focusGuided(); }
 
+function guidedPackInput(){
+  var m = state.modal, it = guidedItem(); if(!it) return;
+  var a = document.getElementById('g-input'), b = document.getElementById('g-input-un');
+  packSet(it, m.sector, a ? a.value : '', b ? b.value : '');
+  var v = draftOf(m.sector)[it.id];
+  var low = isFilled(v) && isLow(Object.assign({}, it, {currentCount: num(v)}));
+  var lw = document.getElementById('g-low'); if(lw) lw.hidden = !low;
+}
+function guidedPackStep(part, dir){
+  var m = state.modal, it = guidedItem(); if(!it) return;
+  var pp = packParts(it, m.sector), cx = pp.cx, un = pp.un;
+  if(cx === '' && un === ''){
+    var ls = (it.currentCount != null) ? packSplit(it, it.currentCount) : {cx: 0, un: 0};
+    cx = String(ls.cx); un = String(ls.un);
+  }
+  if(part === 'cx'){ var c = (num(cx) || 0) + dir; cx = String(c < 0 ? 0 : c); if(un === '') un = '0'; }
+  else { var u = (num(un) || 0) + dir; un = String(u < 0 ? 0 : u); if(cx === '') cx = '0'; }
+  packSet(it, m.sector, cx, un);
+  guidedRefresh();
+}
+
 function guidedInput(v){
   var m = state.modal, it = guidedItem(); if(!it) return;
+  if(packOf(it)){ guidedPackInput(); return; }
   draftOf(m.sector)[it.id] = v;
   var low = v !== '' && isLow(Object.assign({}, it, {currentCount: num(v)}));
   var lw = document.getElementById('g-low'); if(lw) lw.hidden = !low;
@@ -2054,13 +2147,18 @@ function scanResultHtml(r){
   var it = r.id ? state.items[r.id] : null;
   if(r.type === 'added' && it){
     return '<div class="scan-card hit"><div class="item-name">+1 '+esc(it.product)+'</div>' +
-      '<div class="row"><span class="mono">total '+fmtQty(r.total)+' '+esc(it.unit||'')+'</span>' +
+      '<div class="row"><span class="mono">total '+esc(fmtCount(it, r.total))+'</span>' +
       '<button class="btn btn-ghost btn-sm" data-action="scan-undo" data-id="'+it.id+'">Desfazer</button></div></div>';
   }
   if(r.type === 'found' && it){
     var d = draftOf(it.sector);
     var v = (isFilled(d[it.id]) && !isNC(d[it.id])) ? String(d[it.id]) : '';
-    var last = (it.currentCount === null || it.currentCount === undefined) ? '' : fmtQty(it.currentCount);
+    var last = (it.currentCount === null || it.currentCount === undefined) ? '' : fmtCount(it, it.currentCount);
+    if(packOf(it)){
+      return '<div class="scan-card hit"><div class="item-name">'+esc(it.product)+'</div>' +
+        '<div class="item-sub"><span class="tag">'+esc(SECTOR_LABEL[it.sector])+' · '+esc(it.category)+'</span>'+packTag(it)+(last?'<span class="tag">ant. '+esc(last)+'</span>':'')+'</div>' +
+        '<div class="row">'+packInputsHtml(it, it.sector)+'<button class="btn btn-primary btn-sm" data-action="scan-qty-done">Anotar</button></div></div>';
+    }
     return '<div class="scan-card hit"><div class="item-name">'+esc(it.product)+'</div>' +
       '<div class="item-sub"><span class="tag">'+esc(SECTOR_LABEL[it.sector])+' · '+esc(it.category)+'</span><span class="tag">'+esc(it.unit||'')+'</span>'+(last?'<span class="tag">ant. '+esc(last)+'</span>':'')+'</div>' +
       '<div class="row"><div class="stepper">' +
@@ -2123,8 +2221,10 @@ function handleScan(code){
   var d = draftOf(it.sector);
   if(state.scanAdd){
     var cur = (isFilled(d[it.id]) && !isNC(d[it.id])) ? (num(d[it.id]) || 0) : 0;
-    d[it.id] = String(cur + 1);
-    m.result = {type:'added', id: it.id, total: cur + 1};
+    var inc = packOf(it) ? 1 / packOf(it) : 1; // item em caixa: cada leitura conta 1 unidade solta
+    var nt = Math.round((cur + inc) * 10000) / 10000;
+    d[it.id] = String(nt);
+    m.result = {type:'added', id: it.id, total: nt};
     render(); updateScanResult();
   } else {
     m.result = {type:'found', id: it.id};
@@ -2153,8 +2253,8 @@ function scanQtyDone(){
 function scanUndo(id){
   var it = state.items[id]; if(!it) return;
   var d = draftOf(it.sector);
-  var cur = num(d[id]) || 0;
-  if(cur <= 1) delete d[id]; else d[id] = String(cur - 1);
+  var cur = num(d[id]) || 0, dec = packOf(it) ? 1 / packOf(it) : 1;
+  if(cur <= dec + 1e-9) delete d[id]; else d[id] = String(Math.round((cur - dec) * 10000) / 10000);
   state.modal.result = null; render(); updateScanResult();
   setToast('Leitura desfeita.');
 }
@@ -2235,9 +2335,13 @@ document.addEventListener('keydown', function(e){
         var inp = e.target;
         if(inp.value.slice(-code.length) === code){ inp.value = inp.value.slice(0, -code.length); guidedInput(inp.value); }
         handleScan(code);
-      } else guidedMove(1);
+      } else {
+        var gi = guidedItem(), gun = document.getElementById('g-input-un');
+        if(gi && packOf(gi) && gun){ gun.focus(); gun.select(); } else guidedMove(1);
+      }
       return;
     }
+    if(id === 'g-input-un'){ e.preventDefault(); if(!isWedge) guidedMove(1); else handleScan(code); return; }
     var tag = e.target && e.target.tagName;
     if(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if(state.tab !== 'count' || (state.modal && state.modal.type !== 'guided')) return;
@@ -2399,6 +2503,7 @@ async function saveItemForm(form){
     supplierName: fd.get('supplierId') ? (state.suppliers[fd.get('supplierId')]||{}).name : null,
     notes: (fd.get('notes')||'').trim() || null,
     daily: fd.get('daily') === 'on',
+    packSize: (function(v){ v = parseInt(String(v || '').replace(/\D/g, ''), 10); return v > 1 ? v : null; })(fd.get('packSize')),
     barcodes: (fd.get('barcodes')||'').split(/[,;\n]/).map(normCode).filter(function(c, i, a){ return c && a.indexOf(c) === i; })
   };
   if(!data.product) return;
@@ -2489,6 +2594,7 @@ document.addEventListener('click', function(e){
     if(action==='nc-toggle'){ var nid = el.getAttribute('data-id'); var nit = state.items[nid]; if(!nit) return; var nd = draftOf(nit.sector); if(isNC(nd[nid])) delete nd[nid]; else nd[nid] = NC; render(); return; }
     if(action==='guided-start'){ guidedStart(el.getAttribute('data-remaining')==='1'); return; }
     if(action==='g-step'){ guidedStep(parseFloat(el.getAttribute('data-dir'))); return; }
+    if(action==='g-pstep'){ guidedPackStep(el.getAttribute('data-part'), parseFloat(el.getAttribute('data-dir'))); return; }
     if(action==='g-next'){ guidedMove(1); return; }
     if(action==='g-prev'){ guidedMove(-1); return; }
     if(action==='g-nc'){ guidedToggleNC(); return; }
@@ -2548,6 +2654,18 @@ document.addEventListener('click', function(e){
 
 document.addEventListener('input', function(e){
   if(e.target.id === 'g-input'){ guidedInput(e.target.value); return; }
+  if(e.target.id === 'g-input-un'){ guidedPackInput(); return; }
+  if(e.target.matches && e.target.matches('[data-action="pack-input"]')){
+    var box = e.target.closest('.pack-in'); if(!box) return;
+    var pit = state.items[box.getAttribute('data-id')]; if(!pit) return;
+    var psec = box.getAttribute('data-sector') || pit.sector;
+    packSet(pit, psec, box.querySelector('[data-part="cx"]').value, box.querySelector('[data-part="un"]').value);
+    var pv = draftOf(psec)[pit.id];
+    var prow = e.target.closest('.item-row');
+    if(prow){ prow.classList.toggle('low', isFilled(pv) && isLow(Object.assign({}, pit, {currentCount: num(pv)}))); }
+    updateFinalizeBarOnly();
+    return;
+  }
   if(e.target.id === 'sec-search' && state.modal && state.modal.type === 'secitems'){ state.modal.q = e.target.value; secItemsFilter(); return; }
   if(e.target.matches && e.target.matches('[data-action="order-qty"]')){ loadOrderQty(); var oid = e.target.getAttribute('data-id'); if(e.target.value.trim()===''){ delete state.orderQty[oid]; } else { state.orderQty[oid] = e.target.value; } saveOrderQty(); return; }
   if(e.target.id === 'scan-qty'){ var qid = e.target.getAttribute('data-id'); var qit = state.items[qid]; if(qit){ draftOf(qit.sector)[qid] = e.target.value; } return; }
